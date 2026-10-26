@@ -1,20 +1,24 @@
 # Render 배포 설정 (Blueprint). Render 화면에서 New → Blueprint → 이 저장소를 고르면 아래대로 만들어집니다.
+#
+# ── 지금: 무료(free) 요금제 ──
+#   · 15분 동안 아무도 안 쓰면 잠들고, 깨어나는 데 30초~1분 걸림 → 그동안 카카오는 답을 못 받음
+#   · 디스크를 붙일 수 없음 → 서버가 잠들거나 다시 켜지면 출발지 기억·대화 기록이 지워짐
+#   → 혼자 연결해 보고 시험할 때만 쓰세요.
+#
+# ── 어르신들을 초대하기 전에: Starter(월 약 7.25달러)로 바꾸기 ──
+#   1) 아래 plan: free 를 plan: starter 로
+#   2) 맨 아래 "Starter로 바꿀 때" 부분의 # 를 지워서 disk 와 DATA_DIR 를 켜기
+#   3) 이 파일을 GitHub에 다시 올리면 Render가 알아서 반영합니다
 services:
   - type: web
     name: senior-ai
     runtime: node
     region: singapore        # 한국과 가장 가까운 지역 (카카오 5초 제한에 유리)
-    plan: starter            # 잠들지 않는 최소 유료 요금제. free 는 잠들어서 카카오 응답이 실패합니다.
+    plan: free
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
-    disk:                    # 출발지 기억·대화 기록이 재배포 후에도 남도록
-      name: data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
-      - key: DATA_DIR
-        value: /var/data
       - key: ADMIN_TOKEN       # 결과 보고서 열쇠 (Render가 자동으로 만들어 줌)
         generateValue: true
       - key: HASH_SALT         # 사용자 코드를 만들 때 섞는 값 (자동 생성)
@@ -25,3 +29,11 @@ services:
         sync: false
       - key: AGODA_CID
         sync: false
+      # ── Starter로 바꿀 때 아래 두 줄의 # 를 지우세요 ──
+      # - key: DATA_DIR
+      #   value: /var/data
+    # ── Starter로 바꿀 때 아래 네 줄의 # 를 지우세요 (지워지지 않는 디스크 1GB) ──
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1
