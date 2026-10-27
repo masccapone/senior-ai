@@ -5,6 +5,9 @@ process.env.USER_STORE_FILE = 'off'; // 테스트에서는 파일에 저장하�
 process.env.LOG_CONVERSATIONS = 'off';
 const test = require('node:test');
 const assert = require('node:assert');
+
+// 첫 말풍선 글자 (일반 글 또는 계획 카드의 제목+설명)
+const firstText = (j) => { const o = j.template.outputs[0]; return o.simpleText ? o.simpleText.text : `${o.textCard.title}\n${o.textCard.description}`; };
 const { server } = require('../src/server');
 
 let base;
@@ -38,6 +41,12 @@ function checkKakao(json) {
   for (const o of outs) {
     const btns = [];
     if (o.simpleText) assert.ok(o.simpleText.text.length <= 1000);
+    if (o.textCard) {
+      assert.ok(o.textCard.title.length <= 50);
+      assert.ok(o.textCard.description.length <= 400, `계획 카드 설명 ${o.textCard.description.length}자`);
+      assert.ok(o.textCard.buttons.length <= 3);
+      btns.push(...o.textCard.buttons);
+    }
     if (o.listCard) {
       assert.ok(o.listCard.items.length >= 1 && o.listCard.items.length <= 5);
       btns.push(...o.listCard.buttons);
@@ -55,7 +64,8 @@ function checkKakao(json) {
     }
     for (const b of btns) {
       assert.ok(b.label.length <= 14, `버튼 글자 수: ${b.label}`);
-      if (b.action === 'webLink') assert.ok(/^https:\/\//.test(b.webLinkUrl));
+      // 실제 서버는 https. 테스트 서버(127.0.0.1)가 만든 계획표 링크만 http 허용
+      if (b.action === 'webLink') assert.ok(/^https:\/\//.test(b.webLinkUrl) || b.webLinkUrl.startsWith(base), b.webLinkUrl);
     }
   }
 }
@@ -64,7 +74,7 @@ test('"경주 여행" → 요약 + 기차 목록 + 숙소·관광·맛집 카드
   const json = await ask('경주 여행');
   checkKakao(json);
   const [summary, trains, places] = json.template.outputs;
-  assert.match(summary.simpleText.text, /경주 여행 추천/);
+  assert.match(firstText(json), /경주 여행 계획/);
   assert.match(trains.listCard.header.title, /신경주역/);
   assert.match(trains.listCard.items[0].title, /KTX/);
   assert.ok(trains.listCard.items.some((i) => /SRT/.test(i.title)), '서울 출발이면 SRT 안내');
@@ -84,8 +94,59 @@ test('"경주 여행" → 요약 + 기차 목록 + 숙소·관광·맛집 카드
     for (const line of c.description.split('\n')) assert.ok(line.length <= 24, `너무 긴 줄: ${line}`);
   }
   // 출발지를 안 썼으니 기본값 안내와 [출발지 바꾸기]가 맨 앞
-  assert.match(summary.simpleText.text, /서울 \(기본값\)/);
+  assert.match(firstText(json), /서울 \(기본값\)/);
   assert.equal(json.template.quickReplies[0].label, '출발지 바꾸기');
+});
+
+test('가족에게 공유: 계획 카드에 [가족에게 보내기]와 계획표 링크', async () => {
+  const json = await ask('부산에서 둘이 경주 11월 7일 1박');
+  checkKakao(json);
+  const card = json.template.outputs[0].textCard;
+  assert.ok(card, '첫 말풍선은 계획 카드');
+  assert.equal(card.title, '🧳 경주 여행 계획');
+  assert.equal(card.buttons[0].action, 'share');
+  assert.match(card.buttons[0].label, /가족에게 보내기/);
+  const link = card.buttons[1];
+  assert.equal(link.action, 'webLink');
+  const url = new URL(link.webLinkUrl);
+  assert.equal(url.pathname, '/p');
+  assert.equal(url.searchParams.get('d'), '경주');
+  assert.equal(url.searchParams.get('o'), '부산');
+  assert.match(url.searchParams.get('t'), /^\d{4}-11-07$/);
+  assert.equal(url.searchParams.get('n'), '1');
+  assert.equal(url.searchParams.get('p'), '2');
+
+  // 가족이 링크를 열면: 기차 예매 → 숙소 예약 → 가볼 곳·먹거리 순서의 계획표
+  const res = await fetch(link.webLinkUrl);
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /경주 여행 계획/);
+  assert.match(html, /부산 출발/);
+  assert.match(html, /부산역 → 신경주역/);
+  assert.match(html, /어른 2명/);
+  assert.match(html, /코레일에서 예매하기/);
+  assert.match(html, /체크아웃/);
+  assert.match(html, /힐튼 경주/);
+  assert.match(html, /가격·예약 보기/);
+  assert.match(html, /불국사/);
+  assert.match(html, /다른 사람에게 보내기/);
+  // 숙소 예약 링크에 날짜·인원이 아니라 이름만 검색 (네이버 기본)
+  assert.match(html, /search\.naver\.com/);
+});
+
+test('계획표 주소가 잘못되면 안내 페이지', async () => {
+  const bad = await fetch(`${base}/p?d=%3Cscript%3Ealert(1)%3C%2Fscript%3E&o=부산&t=2026-11-07&n=1&p=2`);
+  assert.equal(bad.status, 400);
+  assert.doesNotMatch(await bad.text(), /<script>alert/);
+  assert.equal((await fetch(`${base}/p?d=경주&o=부산&t=2026-02-30&n=1&p=2`)).status, 400);
+  assert.equal((await fetch(`${base}/p?d=경주&o=부산&t=2026-11-07&n=1&p=0`)).status, 400);
+  assert.equal((await fetch(`${base}/p?d=없는곳이름&o=부산&t=2026-11-07&n=1&p=2`)).status, 404);
+  // 모르는 출발지는 서울로
+  const ok = await fetch(`${base}/p?d=강릉&o=뉴욕&t=2026-11-07&n=0&p=1`);
+  assert.equal(ok.status, 200);
+  const html = await ok.text();
+  assert.match(html, /서울 출발/);
+  assert.match(html, /당일 여행이라 숙소는 필요 없어요/);
 });
 
 test('출발지 바꾸기 → 도시 버튼 → 다음부터 기억', async () => {
@@ -94,7 +155,7 @@ test('출발지 바꾸기 → 도시 버튼 → 다음부터 기억', async () =
   const change = first.template.quickReplies.find((r) => r.label === '출발지 바꾸기');
   const menu = await ask(change.messageText, user);
   checkKakao(menu);
-  assert.match(menu.template.outputs[0].simpleText.text, /어디에서 출발/);
+  assert.match(firstText(menu), /어디에서 출발/);
   const labels = menu.template.quickReplies.map((r) => r.label);
   assert.ok(labels.includes('부산') && labels.includes('대구') && labels.includes('광주'));
   assert.ok(!labels.includes('경주'), '여행지는 출발지 후보에서 뺌');
@@ -106,7 +167,7 @@ test('출발지 바꾸기 → 도시 버튼 → 다음부터 기억', async () =
 
   // 다른 여행지를 물어도 부산 출발로 기억
   const next = await ask('강릉 여행', user);
-  assert.match(next.template.outputs[0].simpleText.text, /부산 \(지난번 출발지\)/);
+  assert.match(firstText(next), /부산 \(지난번 출발지\)/);
   assert.match(next.template.outputs[1].listCard.header.title, /부산역 → 강릉역/);
 });
 
@@ -125,7 +186,7 @@ test('출발지 2단계: 지역 → 시·군(여러 쪽) → 선택', async () =
   assert.equal(labels[8], '다음 ▶');
   assert.equal(labels[9], '◀ 지역 다시');
   assert.ok(labels.includes('전주') && labels.includes('목포'));
-  assert.match(jeolla.template.outputs[0].simpleText.text, /전라 어디에서 출발하세요\? \(1\/5쪽\)/);
+  assert.match(firstText(jeolla), /전라 어디에서 출발하세요\? \(1\/5쪽\)/);
 
   // 다음 쪽을 넘겨 해남 고르기
   let page = jeolla;
@@ -137,13 +198,13 @@ test('출발지 2단계: 지역 → 시·군(여러 쪽) → 선택', async () =
   assert.ok(haenam, '해남을 찾을 수 있어야 함');
   const res = await ask(haenam.messageText, user);
   checkKakao(res);
-  assert.match(res.template.outputs[0].simpleText.text, /출발 {2}해남/);
-  assert.match(res.template.outputs[0].simpleText.text, /기차는 목포역에서 타요/);
+  assert.match(firstText(res), /출발 {2}해남/);
+  assert.match(firstText(res), /기차는 목포역에서 타요/);
   assert.match(res.template.outputs[1].listCard.header.title, /목포역 → 신경주역/);
 
   // 다음에도 해남 출발로 기억
   const next = await ask('전주 여행', user);
-  assert.match(next.template.outputs[0].simpleText.text, /해남 \(지난번 출발지\)/);
+  assert.match(firstText(next), /해남 \(지난번 출발지\)/);
 });
 
 test('모든 지역의 모든 시·군을 버튼으로 고를 수 있음', async () => {
@@ -167,7 +228,7 @@ test('모든 지역의 모든 시·군을 버튼으로 고를 수 있음', async
 test('출발지만 말하면 기억하고 여행지를 물어봄', async () => {
   const user = 'senior-2';
   const json = await ask('대전에서 출발해요', user);
-  assert.match(json.template.outputs[0].simpleText.text, /대전 출발로 기억/);
+  assert.match(firstText(json), /대전 출발로 기억/);
   const next = await ask('여수 여행', user);
   assert.match(next.template.outputs[1].listCard.header.title, /대전역 → 여수엑스포역/);
 });
@@ -213,19 +274,19 @@ test('바로가기 문장을 다시 보내도 같은 조건 유지', async () =>
   assert.match(later.messageText, /부산에서/);
   const json = await ask(later.messageText);
   checkKakao(json);
-  assert.match(json.template.outputs[0].simpleText.text, /11월 15일/);
+  assert.match(firstText(json), /11월 15일/);
 });
 
 test('알 수 없는 말 → 다시 묻기', async () => {
   const json = await ask('여행 가고 싶어요');
   checkKakao(json);
-  assert.match(json.template.outputs[0].simpleText.text, /어디로/);
+  assert.match(firstText(json), /어디로/);
 });
 
 test('처음으로 → 사용법', async () => {
   const json = await ask('처음으로');
   checkKakao(json);
-  assert.match(json.template.outputs[0].simpleText.text, /이렇게 적어/);
+  assert.match(firstText(json), /이렇게 적어/);
 });
 
 test('기본 그림이 PNG로 나옴', async () => {

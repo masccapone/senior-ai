@@ -11,7 +11,9 @@ const crypto = require('crypto');
 const config = require('./config');
 const logger = require('./logger');
 const report = require('./report');
-const { recommend } = require('./recommend');
+const { recommend, planData } = require('./recommend');
+const { renderPlan, renderError } = require('./planPage');
+const { isKnownPlace } = require('./parser');
 const { warmUp } = require('./services/train');
 const { NO_IMAGE } = require('./png');
 const K = require('./kakao');
@@ -68,7 +70,7 @@ async function handleSkill(req, res) {
     }, config.responseDeadlineMs);
   });
   try {
-    const result = await Promise.race([recommend(utterance, { imageUrl, userId, meta }), deadline]);
+    const result = await Promise.race([recommend(utterance, { imageUrl, baseUrl: baseUrl(req), userId, meta }), deadline]);
     sendJson(res, 200, result);
     logger.record({ userId, utterance, meta, ms: Date.now() - started });
   } catch (e) {
@@ -78,6 +80,34 @@ async function handleSkill(req, res) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// 여행 계획표 페이지: 가족이 열어서 대신 예약·결제
+// 주소에는 조건만 들어 있고, 열 때마다 최신 정보로 다시 만듭니다.
+async function handlePlan(req, res, url) {
+  const sendHtml = (status, html) => {
+    res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' });
+    res.end(html);
+  };
+  const q = url.searchParams;
+  const d = String(q.get('d') || '').trim();
+  const o = String(q.get('o') || '').trim();
+  const t = String(q.get('t') || '');
+  const n = Number(q.get('n'));
+  const p = Number(q.get('p'));
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+  const valid =
+    /^[가-힣A-Za-z0-9·\s]{1,20}$/.test(d) && date && !isNaN(date) && date.getUTCDate() === +m[3] &&
+    Number.isInteger(n) && n >= 0 && n <= 9 && Number.isInteger(p) && p >= 1 && p <= 9;
+  if (!valid) return sendHtml(400, renderError('주소가 올바르지 않아요.'));
+
+  const origin = isKnownPlace(o) ? o : '서울';
+  const started = Date.now();
+  const data = await planData({ destination: d, origin, date, nights: n, people: p });
+  if (!data) return sendHtml(404, renderError(`'${d}'을(를) 찾지 못했어요.`));
+  logger.record({ userId: 'plan-page', utterance: `[계획표 열람] ${data.dest.name}`, meta: { kind: 'plan_view', destination: data.dest.name, origin }, ms: Date.now() - started });
+  return sendHtml(200, renderPlan(data, `${baseUrl(req)}${url.pathname}${url.search}`));
 }
 
 // 결과 보고서: 열쇠(ADMIN_TOKEN)가 맞을 때만
@@ -119,6 +149,7 @@ const server = http.createServer(async (req, res) => {
         kakaoPlaces: !!config.kakaoRestKey,
       });
     }
+    if (req.method === 'GET' && url.pathname === '/p') return await handlePlan(req, res, url);
     if (req.method === 'GET' && (url.pathname === '/admin/report' || url.pathname === '/admin/logs.jsonl')) {
       return handleAdmin(req, res, url);
     }

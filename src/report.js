@@ -30,7 +30,10 @@ function countBy(rows, key) {
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-function summarize(rows) {
+function summarize(allRows) {
+  // 계획표 페이지 열람(가족 공유)은 대화가 아니므로 따로 셉니다
+  const planViews = allRows.filter((r) => r.kind === 'plan_view');
+  const rows = allRows.filter((r) => r.kind !== 'plan_view');
   const users = new Map();
   for (const r of rows) {
     const u = users.get(r.u) || { u: r.u, n: 0, fails: 0, days: new Set(), first: r.t, last: r.t };
@@ -63,6 +66,8 @@ function summarize(rows) {
     failures: fails.slice(-50).reverse(),
     typedSamples: rows.filter((r) => !r.button).slice(-30).reverse(),
     userList: [...users.values()].sort((a, b) => b.n - a.n),
+    planViews: planViews.length,
+    planViewDest: countBy(planViews, 'dest').slice(0, 10),
   };
 }
 
@@ -75,6 +80,7 @@ function toText(s) {
   L.push(`알아들은 비율 ${pct(s.understood, s.messages)}% (못 알아들음 ${s.failCount}건)`);
   L.push(`직접 쓴 말 ${pct(s.typed, s.messages)}% · 버튼 ${100 - pct(s.typed, s.messages)}%`);
   L.push(`출발지를 안 바꾸고 서울 기본값으로 본 추천 ${pct(s.originDefault, s.recCount)}%`);
+  L.push(`계획표 열람 ${s.planViews}번`);
   L.push('', '[인기 여행지] ' + s.destinations.map(([k, v]) => `${k} ${v}`).join(', '));
   L.push('[출발지] ' + s.origins.map(([k, v]) => `${k} ${v}`).join(', '));
   L.push('', '[못 알아들은 말 — 최근]');
@@ -96,17 +102,18 @@ function bars(list, label = (k) => k) {
 
 function toHtml(s, { logsUrl = '' } = {}) {
   const card = (title, value, note = '') => `<div class="stat"><div class="t">${title}</div><div class="n">${value}</div><div class="muted">${note}</div></div>`;
-  const body = !s.messages
+  const body = !s.messages && !s.planViews
     ? '<p>아직 기록이 없습니다. 카카오톡에서 챗봇에 말을 걸면 여기에 쌓입니다.</p>'
     : `
   <p class="muted">기간 ${esc(s.from)} ~ ${esc(s.to)} · 한국 시간 기준</p>
   <div class="stats">
     ${card('써 본 사람', `${s.users}명`, `이틀 이상 다시 온 사람 ${s.returning}명`)}
-    ${card('보낸 메시지', `${s.messages}개`, `한 사람당 평균 ${(s.messages / s.users).toFixed(1)}개`)}
+    ${card('보낸 메시지', `${s.messages}개`, `한 사람당 평균 ${s.users ? (s.messages / s.users).toFixed(1) : 0}개`)}
     ${card('알아들은 비율', `${pct(s.understood, s.messages)}%`, `못 알아들음 ${s.failCount}건`)}
     ${card('직접 쓴 말', `${pct(s.typed, s.messages)}%`, `나머지는 버튼으로`)}
     ${card('출발지 기본값(서울) 그대로', `${pct(s.originDefault, s.recCount)}%`, '높으면 출발지 안내가 잘 안 보인다는 뜻')}
     ${card('느린 응답(3초 넘음)', `${s.slow}건`, '카카오는 5초가 넘으면 실패')}
+    ${card('계획표 열람', `${s.planViews}번`, '[가족에게 보내기]로 공유된 계획표를 연 횟수(본인 포함)')}
   </div>
 
   <h2>😥 못 알아들은 말 (최근 50개)</h2>

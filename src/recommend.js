@@ -110,10 +110,29 @@ function chooseOrigin(q) {
 }
 
 function summaryText(q, dest, ctx) {
+  return [`🧳 ${dest.name} 여행 추천이에요`, '', ...summaryLines(q, dest, ctx)].join('\n');
+}
+
+// 계획표 주소: 여행 조건만 담음 → 서버가 잠들었다 깨도 링크가 깨지지 않음 (열 때마다 새로 만듦)
+function planUrl(baseUrl, q) {
+  if (!baseUrl) return null;
+  const p = new URLSearchParams({ d: q.destination, o: q.origin, t: ymd(q.date, '-'), n: String(q.nights), p: String(q.people) });
+  return `${baseUrl}/p?${p}`;
+}
+
+// 전체 추천의 첫 말풍선: 요약 + [가족에게 보내기] [계획표·예약 보기]
+// 이 말풍선을 받은 가족은 [계획표·예약 보기]에서 기차·숙소를 대신 예약·결제할 수 있습니다.
+function planCard(q, dest, ctx, url) {
+  const lines = summaryLines(q, dest, ctx);
+  lines.push('', '📤 [가족에게 보내기]를 누르면 자녀분이 이 계획을 받아 기차·숙소를 대신 예약해 드릴 수 있어요.');
+  const buttons = [K.button.share('📤 가족에게 보내기')];
+  if (url) buttons.push(K.button.link('📄 계획표·예약 보기', url));
+  return K.textCard({ title: `🧳 ${dest.name} 여행 계획`, description: lines.join('\n'), buttons });
+}
+
+function summaryLines(q, dest, ctx) {
   const originTag = { said: '', remembered: ' (지난번 출발지)', default: ' (기본값)' }[q.originSource];
   const lines = [
-    `🧳 ${dest.name} 여행 추천이에요`,
-    '',
     `📍 출발  ${q.origin}${originTag}`,
     ...(ctx.from && !dest.island && ctx.from.name.replace(/\(.*\)/, '') !== q.origin ? [`🚉 기차는 ${ctx.from.name}역에서 타요`] : []),
     `📅 날짜  ${formatDate(q.date)}${q.nights ? ` · ${q.nights}박` : ' · 당일'}`,
@@ -125,7 +144,7 @@ function summaryText(q, dest, ctx) {
   if (q.assumed.date || q.assumed.people) {
     lines.push('', `날짜·인원이 다르면 이렇게 적어 주세요.\n예) ${dest.name} 여행 11월 8일 3명`);
   }
-  return lines.join('\n');
+  return lines;
 }
 
 // 기차는 옆으로 넘기는 카드 대신 "목록 한 장"으로: 시간표를 한눈에 비교할 수 있게.
@@ -189,7 +208,7 @@ function moreReplies(q, current) {
  * @param {{imageUrl: string, now?: Date, userId?: string}} opts
  *   imageUrl: 사진 없는 카드에 넣을 기본 그림, userId: 카카오 사용자 키(출발지 기억용)
  */
-async function recommend(utterance, { imageUrl, now, userId, meta = {} } = {}) {
+async function recommend(utterance, { imageUrl, baseUrl, now, userId, meta = {} } = {}) {
   // meta: 대화 기록용 정보를 채워 돌려줍니다 (어떤 답을 했는지, 알아들었는지)
   const q = parse(utterance, now, { rememberedOrigin: store.getOrigin(userId) });
   if (q.command === 'welcome') return Object.assign(meta, { kind: 'welcome' }), welcome();
@@ -218,17 +237,7 @@ async function recommend(utterance, { imageUrl, now, userId, meta = {} } = {}) {
   if (q.command === 'chooseOrigin') return Object.assign(meta, { kind: 'choose_origin' }), chooseOrigin(q);
   meta.kind = 'recommend';
 
-  const from = originStationOf(q.origin);
-  const to = dest.island ? null : nearestStation(dest.lat, dest.lng);
-  const wantTrains = q.intent === 'all' || q.intent === 'trains';
-  const kinds = q.intent === 'all' ? ['hotels', 'sights', 'foods'] : q.intent === 'trains' ? [] : [q.intent];
-  const count = q.intent === 'all' ? 3 : 5;
-
-  const [trainResult, places] = await Promise.all([
-    wantTrains && to ? findTrains({ from, to: to.station, dateYmd: ymd(q.date) }) : { trains: [], source: 'none' },
-    kinds.length ? findPlaces(dest, kinds, count) : {},
-  ]);
-
+  const { from, to, trainResult, places } = await gather(q, dest);
   const ctx = { trainSource: trainResult.source, from };
 
   if (q.intent === 'trains') {
@@ -256,9 +265,45 @@ async function recommend(utterance, { imageUrl, now, userId, meta = {} } = {}) {
     ...places.foods.slice(0, 2).map((p) => placeCard('foods', p, q, dest, imageUrl)),
   ];
   return K.response(
-    [K.simpleText(summaryText(q, dest, ctx)), trainList(q, dest, from, to, trainResult), K.carousel('basicCard', mixed)],
+    [planCard(q, dest, ctx, planUrl(baseUrl, q)), trainList(q, dest, from, to, trainResult), K.carousel('basicCard', mixed)],
     moreReplies(q, 'all'),
   );
 }
 
-module.exports = { recommend, welcome };
+// 기차·숙소·가볼 곳·먹거리를 한꺼번에 모음 (챗봇 답변과 계획표 페이지가 함께 씀)
+async function gather(q, dest) {
+  const from = originStationOf(q.origin);
+  const to = dest.island ? null : nearestStation(dest.lat, dest.lng);
+  const intent = q.intent || 'all';
+  const wantTrains = intent === 'all' || intent === 'trains';
+  const kinds = intent === 'all' ? ['hotels', 'sights', 'foods'] : intent === 'trains' ? [] : [intent];
+  const count = intent === 'all' ? 3 : 5;
+  const [trainResult, places] = await Promise.all([
+    wantTrains && to ? findTrains({ from, to: to.station, dateYmd: ymd(q.date) }) : { trains: [], source: 'none' },
+    kinds.length ? findPlaces(dest, kinds, count) : {},
+  ]);
+  return { from, to, trainResult, places };
+}
+
+/**
+ * 계획표 페이지용 데이터. 주소의 조건(여행지·출발지·날짜·박수·인원)으로 다시 만듭니다.
+ * @returns {Promise<null | object>} 여행지를 못 찾으면 null
+ */
+async function planData({ destination, origin, date, nights, people }) {
+  const dest = await resolveDestination(destination);
+  if (!dest) return null;
+  const q = { destination: dest.name, origin, date, nights, people, intent: 'all' };
+  const { from, to, trainResult, places } = await gather(q, dest);
+  const book = (p) => links.hotelLink(p.name || p.title, dest.name, date, nights, people);
+  return {
+    dest, origin, date, nights, people, from, to,
+    returnDate: addDays(date, nights),
+    trains: trainResult.trains, trainSource: trainResult.source, trainNote: trainResult.note, srt: !!trainResult.srt,
+    korailUrl: links.korail(), srtUrl: links.srt(), flightUrl: links.flightLink(origin, dest.name),
+    hotels: places.hotels.map((p) => ({ ...p, bookUrl: p.source === 'search' ? null : book(p) })),
+    sights: places.sights,
+    foods: places.foods,
+  };
+}
+
+module.exports = { recommend, welcome, planData };

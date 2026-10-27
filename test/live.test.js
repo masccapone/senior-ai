@@ -6,6 +6,9 @@ process.env.LOG_CONVERSATIONS = 'off';
 const test = require('node:test');
 const assert = require('node:assert');
 
+// 첫 말풍선 글자 (일반 글 또는 계획 카드의 제목+설명)
+const firstText = (j) => { const o = j.template.outputs[0]; return o.simpleText ? o.simpleText.text : `${o.textCard.title}\n${o.textCard.description}`; };
+
 // 카카오 장소 검색의 가짜 응답 (공식 문서의 필드 이름 그대로)
 const kakaoDoc = (name, cat, extra = {}) => ({
   id: '1', place_name: name, category_name: cat, category_group_code: 'FD6', phone: '054-000-0000',
@@ -78,7 +81,7 @@ test('열차: 역 ID를 불러와 시간표를 아침·오전·오후로 3편 �
 test('인기 여행지: 실제 시간표 + 직접 고른 추천 + 먹거리에 실제 가게', async () => {
   const json = await recommend('경주 여행 10월 31일', { imageUrl: 'https://x/noimage.png', now: new Date('2026-10-26T01:00:00Z') });
   const [summary, trains, cards] = json.template.outputs;
-  assert.doesNotMatch(summary.simpleText.text, /예시예요/);
+  assert.doesNotMatch(firstText(json), /예시예요/);
   assert.match(trains.listCard.items[0].title, /KTX 07:30 출발 → 09:35 도착/);
   assert.match(trains.listCard.items[0].description, /2명 98,600원/);
 
@@ -109,6 +112,6 @@ test('카카오 검색 결과가 없으면 관광공사 정보와 사진', async
 test('목록에 없는 지명은 관광공사 검색으로 위치를 찾음', async () => {
   // 고창 같은 시·군은 내장 목록에 있으니, 목록에 없는 관광지 이름으로 확인
   const json = await recommend('선운사 여행', { imageUrl: 'https://x/n.png' });
-  assert.match(json.template.outputs[0].simpleText.text, /선운사 여행 추천/);
+  assert.match(firstText(json), /선운사 여행 계획/);
   assert.ok(calls.includes('searchKeyword2'));
 });

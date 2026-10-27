@@ -20,7 +20,19 @@ const LIMIT = {
 const button = {
   link: (label, url) => ({ action: 'webLink', label: cut(label, LIMIT.label), webLinkUrl: url }),
   message: (label, messageText) => ({ action: 'message', label: cut(label, LIMIT.label), messageText }),
+  // 이 말풍선을 다른 카카오톡 대화방(가족·친구)에 그대로 보내기
+  share: (label) => ({ action: 'share', label: cut(label, LIMIT.label) }),
 };
+
+// 글 + 버튼 말풍선 (한 장으로 쓸 때 설명 최대 400자)
+const textCard = ({ title, description, buttons = [] }) => ({
+  textCard: {
+    title: cut(title, LIMIT.title),
+    description: cut(description, LIMIT.textDesc),
+    buttons: buttons.slice(0, LIMIT.buttons),
+    buttonLayout: 'vertical',
+  },
+});
 
 const simpleText = (text) => ({ simpleText: { text: cut(text, LIMIT.simpleText) } });
 
@@ -61,4 +73,4 @@ function response(outputs, quickReplies = []) {
   };
 }
 
-module.exports = { button, simpleText, listCard, basicCard, carousel, quickReply, response, LIMIT, cut };
+module.exports = { button, simpleText, textCard, listCard, basicCard, carousel, quickReply, response, LIMIT, cut };

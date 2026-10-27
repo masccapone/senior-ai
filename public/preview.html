@@ -47,6 +47,11 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 
 function renderButton(b) {
   if (b.action === 'webLink') { const a = el('a', 'btn', b.label); a.href = b.webLinkUrl; a.target = '_blank'; return a; }
+  if (b.action === 'share') {
+    const s = el('button', 'btn', b.label);
+    s.onclick = () => alert('카카오톡에서는 여기서 친구·가족을 골라 이 말풍선을 그대로 보내는 화면이 열려요.\n받은 사람은 [계획표·예약 보기]를 눌러 대신 예약할 수 있어요.');
+    return s;
+  }
   const btn = el('button', 'btn', b.label); btn.onclick = () => send(b.messageText || b.label); return btn;
 }
 function renderBasicCard(c) {
@@ -73,6 +78,14 @@ function render(json) {
   for (const o of json.template.outputs) {
     const row = el('div'); row.style.margin = '6px 0';
     if (o.simpleText) row.appendChild(el('div', 'bubble', o.simpleText.text));
+    if (o.textCard) {
+      const box = el('div', 'list');
+      box.appendChild(el('div', 'head', o.textCard.title));
+      const d = el('div', 'bubble', o.textCard.description); d.style.borderRadius = '0'; d.style.maxWidth = 'none';
+      box.appendChild(d);
+      (o.textCard.buttons || []).forEach((b) => box.appendChild(renderButton(b)));
+      row.appendChild(box);
+    }
     if (o.listCard) row.appendChild(renderListCard(o.listCard));
     if (o.basicCard) row.appendChild(renderBasicCard(o.basicCard));
     if (o.carousel) { const c = el('div', 'carousel'); o.carousel.items.forEach((i) => c.appendChild(renderBasicCard(i))); row.appendChild(c); }
